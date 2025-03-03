@@ -10,7 +10,7 @@ class MessageController extends Controller
 {
     public function index()
     {
-        $user = auth()->user();
+        $user = \Illuminate\Support\Facades\Auth::user();
 
         // Get all jobs where the user has messages
         $jobsWithMessages = Job::whereHas('messages', function ($query) use ($user) {

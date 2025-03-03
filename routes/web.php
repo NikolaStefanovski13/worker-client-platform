@@ -2,6 +2,9 @@
 
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\DashboardController;
+
+// Ensure the DashboardController class exists in the specified namespace
+// If it does not exist, create the class in the appropriate file
 use App\Http\Controllers\JobController;
 use App\Http\Controllers\JobApplicationController;
 use App\Http\Controllers\MessageController;
