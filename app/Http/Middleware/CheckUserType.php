@@ -14,8 +14,18 @@ class CheckUserType
      */
     public function handle(Request $request, Closure $next, string $userType): Response
     {
-        if (!Auth::check() || Auth::user()->user_type !== $userType) {
-            return redirect()->route('dashboard')->with('error', 'You do not have permission to access this page.');
+        if (!Auth::check()) {
+            return redirect()->route('login');
+        }
+
+        $user = Auth::user();
+
+        if ($userType === 'worker' && !$user->isWorker()) {
+            return redirect()->route('dashboard')->with('error', 'Access denied. Worker access only.');
+        }
+
+        if ($userType === 'client' && !$user->isClient()) {
+            return redirect()->route('dashboard')->with('error', 'Access denied. Client access only.');
         }
 
         return $next($request);

@@ -1,52 +1,56 @@
 <?php
 
-namespace App\Http\Controllers;
+use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\JobController;
+use App\Http\Controllers\JobApplicationController;
+use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\MessageController;
+use App\Http\Controllers\PaymentController;
+use App\Http\Controllers\ReviewController;
+use App\Http\Controllers\SearchController;
 
-use Illuminate\Http\Request;
-use App\Models\Job;
-use App\Models\JobApplication;
-use App\Models\User;
-use App\Models\Skill;
-use Illuminate\Support\Facades\Auth;
+/*
+|--------------------------------------------------------------------------
+| Web Routes
+|--------------------------------------------------------------------------
+*/
 
-class DashboardController extends Controller
-{
-    /**
-     * Display the user's dashboard.
-     */
-    public function index(Request $request)
-    {
-        $user = Auth::user();
+Route::get('/', function () {
+    return view('welcome');
+});
 
-        if ($user->isWorker()) {
-            // Get worker's applied jobs
-            $appliedJobs = JobApplication::where('worker_id', $user->id)
-                ->with('job')
-                ->get()
-                ->groupBy('status');
+// Authentication routes (Laravel's default)
+Auth::routes();
 
-            // Get jobs that match worker's skills
-            $skillIds = $user->skills->pluck('id')->toArray() ?: [0];
-            $matchingJobs = Job::where('status', 'posted')
-                ->whereHas('category', function ($query) use ($skillIds) {
-                    $query->whereIn('id', $skillIds);
-                })
-                ->latest()
-                ->take(5)
-                ->get();
+// Dashboard
+Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
-            return view('dashboard.worker', compact('appliedJobs', 'matchingJobs'));
-        } else {
-            // Get client's posted jobs
-            $postedJobs = Job::where('client_id', $user->id)
-                ->with(['applications' => function ($query) {
-                    $query->with('worker');
-                }])
-                ->latest()
-                ->get()
-                ->groupBy('status');
+// Profile routes
+Route::get('/profile', [ProfileController::class, 'show'])->name('profile.show');
+Route::get('/profile/edit', [ProfileController::class, 'edit'])->name('profile.edit');
+Route::put('/profile', [ProfileController::class, 'update'])->name('profile.update');
 
-            return view('dashboard.client', compact('postedJobs'));
-        }
-    }
-}
+// Job routes
+Route::resource('jobs', JobController::class);
+Route::put('/jobs/{job}/status', [JobController::class, 'updateStatus'])->name('jobs.update-status');
+
+// Job application routes
+Route::post('/jobs/{job}/apply', [JobApplicationController::class, 'store'])->name('job-applications.store');
+Route::put('/job-applications/{jobApplication}/status', [JobApplicationController::class, 'updateStatus'])->name('job-applications.update-status');
+
+// Message routes
+Route::get('/messages', [MessageController::class, 'index'])->name('messages.index');
+Route::get('/messages/{job}', [MessageController::class, 'show'])->name('messages.show');
+Route::post('/messages/{job}', [MessageController::class, 'store'])->name('messages.store');
+
+// Payment routes
+Route::get('/payments', [PaymentController::class, 'index'])->name('payments.index');
+Route::post('/payments/{job}', [PaymentController::class, 'store'])->name('payments.store');
+Route::put('/payments/{payment}/release', [PaymentController::class, 'release'])->name('payments.release');
+
+// Review routes
+Route::post('/reviews/{job}', [ReviewController::class, 'store'])->name('reviews.store');
+
+// Search routes
+Route::get('/search', [SearchController::class, 'index'])->name('search.index');

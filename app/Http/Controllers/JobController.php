@@ -4,121 +4,155 @@ namespace App\Http\Controllers;
 
 use App\Models\Job;
 use App\Models\Skill;
+use App\Models\JobApplication;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class JobController extends Controller
 {
-    public function __construct()
+    /**
+     * Display a listing of the resource.
+     */
+    public function index(Request $request)
     {
-        $this->middleware('auth');
-        $this->middleware('user.type:client')->only(['create', 'store']);
+        $query = Job::where('status', 'posted');
+
+        // Apply filters if they exist
+        if ($request->has('category')) {
+            $query->where('category_id', $request->category);
+        }
+
+        if ($request->has('location')) {
+            $query->where('location', 'like', '%' . $request->location . '%');
+        }
+
+        if ($request->has('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('title', 'like', '%' . $search . '%')
+                    ->orWhere('description', 'like', '%' . $search . '%');
+            });
+        }
+
+        $jobs = $query->latest()->paginate(10);
+        $categories = Skill::where('is_category', true)->get();
+
+        return view('jobs.index', compact('jobs', 'categories'));
     }
 
-    public function index()
-    {
-        $jobs = Job::with(['client', 'category'])
-            ->where('status', 'posted')
-            ->latest()
-            ->paginate(10);
-
-        return view('jobs.index', compact('jobs'));
-    }
-
+    /**
+     * Show the form for creating a new resource.
+     */
     public function create()
     {
-        $categories = Skill::select('id', 'name')
-            ->distinct('category')
-            ->get()
-            ->groupBy('category');
+        $this->authorize('create', Job::class);
 
+        $categories = Skill::where('is_category', true)->get();
         return view('jobs.create', compact('categories'));
     }
 
+    /**
+     * Store a newly created resource in storage.
+     */
     public function store(Request $request)
     {
+        $this->authorize('create', Job::class);
+
         $validated = $request->validate([
             'title' => 'required|string|max:255',
             'description' => 'required|string',
             'category_id' => 'required|exists:skills,id',
-            'budget' => 'required|numeric|min:1',
+            'budget' => 'required|numeric|min:0',
             'location' => 'required|string|max:255',
         ]);
 
-        $job = Job::create([
-            'client_id' => auth()->id(),
-            'title' => $validated['title'],
-            'description' => $validated['description'],
-            'category_id' => $validated['category_id'],
-            'budget' => $validated['budget'],
-            'location' => $validated['location'],
-            'status' => 'posted',
-        ]);
+        $job = new Job($validated);
+        $job->client_id = Auth::id();
+        $job->status = 'posted';
+        $job->save();
 
-        return redirect()->route('jobs.show', $job)
-            ->with('success', 'Job posted successfully!');
+        return redirect()->route('jobs.show', $job)->with('success', 'Job posted successfully!');
     }
 
+    /**
+     * Display the specified resource.
+     */
     public function show(Job $job)
     {
         $job->load(['client', 'category', 'applications.worker']);
-
         $hasApplied = false;
-        if (auth()->user()->isWorker()) {
-            $hasApplied = $job->applications()->where('worker_id', auth()->id())->exists();
+        $userApplication = null;
+
+        if (Auth::check() && Auth::user()->isWorker()) {
+            $hasApplied = $job->applications->where('worker_id', Auth::id())->count() > 0;
+            $userApplication = $job->applications->where('worker_id', Auth::id())->first();
         }
 
-        return view('jobs.show', compact('job', 'hasApplied'));
+        return view('jobs.show', compact('job', 'hasApplied', 'userApplication'));
     }
 
+    /**
+     * Show the form for editing the specified resource.
+     */
     public function edit(Job $job)
     {
-        if ($job->client_id !== auth()->id()) {
-            return redirect()->route('dashboard')
-                ->with('error', 'You are not authorized to edit this job.');
-        }
+        $this->authorize('update', $job);
 
-        $categories = Skill::select('id', 'name')
-            ->distinct('category')
-            ->get()
-            ->groupBy('category');
-
+        $categories = Skill::where('is_category', true)->get();
         return view('jobs.edit', compact('job', 'categories'));
     }
 
+    /**
+     * Update the specified resource in storage.
+     */
     public function update(Request $request, Job $job)
     {
-        if ($job->client_id !== auth()->id()) {
-            return redirect()->route('dashboard')
-                ->with('error', 'You are not authorized to edit this job.');
-        }
+        $this->authorize('update', $job);
 
         $validated = $request->validate([
             'title' => 'required|string|max:255',
             'description' => 'required|string',
             'category_id' => 'required|exists:skills,id',
-            'budget' => 'required|numeric|min:1',
+            'budget' => 'required|numeric|min:0',
             'location' => 'required|string|max:255',
         ]);
 
         $job->update($validated);
 
-        return redirect()->route('jobs.show', $job)
-            ->with('success', 'Job updated successfully!');
+        return redirect()->route('jobs.show', $job)->with('success', 'Job updated successfully!');
     }
 
-    public function complete(Job $job)
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(Job $job)
     {
-        if ($job->client_id !== auth()->id() || $job->status !== 'in_progress') {
-            return redirect()->route('dashboard')
-                ->with('error', 'You cannot mark this job as complete.');
-        }
+        $this->authorize('delete', $job);
 
-        $job->update([
-            'status' => 'completed',
-            'completed_at' => now(),
+        $job->delete();
+
+        return redirect()->route('jobs.index')->with('success', 'Job deleted successfully!');
+    }
+
+    /**
+     * Update job status
+     */
+    public function updateStatus(Request $request, Job $job)
+    {
+        $this->authorize('update', $job);
+
+        $validated = $request->validate([
+            'status' => 'required|in:posted,in_progress,completed',
         ]);
 
-        return redirect()->route('jobs.show', $job)
-            ->with('success', 'Job marked as complete. Please leave a review for the worker.');
+        $job->status = $validated['status'];
+
+        if ($validated['status'] === 'completed') {
+            $job->completed_at = now();
+        }
+
+        $job->save();
+
+        return redirect()->route('jobs.show', $job)->with('success', 'Job status updated successfully!');
     }
 }
