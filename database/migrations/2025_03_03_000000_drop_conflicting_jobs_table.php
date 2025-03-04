@@ -11,9 +11,9 @@ return new class extends Migration
      */
     public function up(): void
     {
-        // If the jobs table exists, we'll drop it since we're using work_jobs
-        if (Schema::hasTable('jobs')) {
-            Schema::drop('jobs');
+        // If the jobs table exists (for queue), we'll rename it
+        if (Schema::hasTable('jobs') && !Schema::hasTable('queue_jobs')) {
+            Schema::rename('jobs', 'queue_jobs');
         }
     }
 
@@ -23,6 +23,5 @@ return new class extends Migration
     public function down(): void
     {
         // Nothing to do here since recreating the table would be handled by the original migration
-        // If needed, you could recreate the table here, but it's safer to let the original migration handle that
     }
 };

@@ -18,7 +18,7 @@ class DashboardController extends Controller
     {
         $user = Auth::user();
 
-        if ($user->user_type === 'worker') {
+        if ($user->isWorker()) {
             // Get worker's applied jobs
             $appliedJobs = JobApplication::where('worker_id', $user->id)
                 ->with('job')

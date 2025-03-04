@@ -15,9 +15,7 @@ class CheckUserType
     public function handle(Request $request, Closure $next, string $userType): Response
     {
         if (!Auth::check() || Auth::user()->user_type !== $userType) {
-            if (!Auth::check() || Auth::user()->user_type !== $userType) {
-                return redirect()->route('dashboard')->with('error', 'You do not have permission to access this page.');
-            }
+            return redirect()->route('dashboard')->with('error', 'You do not have permission to access this page.');
         }
 
         return $next($request);
