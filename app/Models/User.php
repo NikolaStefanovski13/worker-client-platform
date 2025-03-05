@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -41,11 +42,10 @@ class User extends Authenticatable
      */
     protected $casts = [
         'email_verified_at' => 'datetime',
-        'password' => 'hashed',
     ];
 
     /**
-     * Check if user is a worker.
+     * Determine if the user is a worker.
      *
      * @return bool
      */
@@ -55,7 +55,7 @@ class User extends Authenticatable
     }
 
     /**
-     * Check if user is a client.
+     * Determine if the user is a client.
      *
      * @return bool
      */
@@ -73,15 +73,16 @@ class User extends Authenticatable
     }
 
     /**
-     * Get the user's skills (for workers).
+     * Get the user's skills.
      */
     public function skills()
     {
-        return $this->belongsToMany(Skill::class, 'user_skills');
+        return $this->belongsToMany(Skill::class, 'user_skills')
+            ->withTimestamps();
     }
 
     /**
-     * Get the user's service areas (for workers).
+     * Get the user's service areas.
      */
     public function serviceAreas()
     {
@@ -89,7 +90,7 @@ class User extends Authenticatable
     }
 
     /**
-     * Get the jobs posted by the user (for clients).
+     * Get the jobs posted by the client.
      */
     public function postedJobs()
     {
@@ -97,7 +98,7 @@ class User extends Authenticatable
     }
 
     /**
-     * Get the job applications submitted by the user (for workers).
+     * Get the job applications submitted by the worker.
      */
     public function jobApplications()
     {
@@ -134,5 +135,28 @@ class User extends Authenticatable
     public function receivedReviews()
     {
         return $this->hasMany(Review::class, 'reviewee_id');
+    }
+
+    /**
+     * Get the user's notifications.
+     */
+    public function notifications()
+    {
+        return $this->hasMany(Notification::class);
+    }
+
+    /**
+     * Get the user's average rating.
+     *
+     * @return float
+     */
+    public function getAverageRatingAttribute()
+    {
+        $reviews = $this->receivedReviews;
+        if ($reviews->isEmpty()) {
+            return 0;
+        }
+
+        return $reviews->avg('rating');
     }
 }

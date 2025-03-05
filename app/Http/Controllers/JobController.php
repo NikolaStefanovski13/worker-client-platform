@@ -3,156 +3,277 @@
 namespace App\Http\Controllers;
 
 use App\Models\Job;
-use App\Models\Skill;
 use App\Models\JobApplication;
+use App\Models\Skill;
+use App\Http\Requests\StoreJobRequest;
+use App\Http\Requests\UpdateJobRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
 class JobController extends Controller
 {
     /**
-     * Display a listing of the resource.
+     * Create a new controller instance.
+     *
+     * @return void
      */
-    public function index(Request $request)
+    public function __construct()
     {
-        $query = Job::where('status', 'posted');
-
-        // Apply filters if they exist
-        if ($request->has('category')) {
-            $query->where('category_id', $request->category);
-        }
-
-        if ($request->has('location')) {
-            $query->where('location', 'like', '%' . $request->location . '%');
-        }
-
-        if ($request->has('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('title', 'like', '%' . $search . '%')
-                    ->orWhere('description', 'like', '%' . $search . '%');
-            });
-        }
-
-        $jobs = $query->latest()->paginate(10);
-        $categories = Skill::where('is_category', true)->get();
-
-        return view('jobs.index', compact('jobs', 'categories'));
+        $this->middleware('auth');
     }
 
     /**
-     * Show the form for creating a new resource.
+     * Display a listing of the jobs.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function index()
+    {
+        $jobs = Job::where('status', 'posted')
+            ->latest()
+            ->paginate(10);
+
+        return view('jobs.index', compact('jobs'));
+    }
+
+    /**
+     * Show the form for creating a new job.
+     *
+     * @return \Illuminate\Http\Response
      */
     public function create()
     {
-        $this->authorize('create', Job::class);
+        // Only clients can create jobs
+        if (!Auth::user()->isClient()) {
+            return redirect()->route('dashboard')
+                ->with('error', 'Only clients can post jobs.');
+        }
 
-        $categories = Skill::where('is_category', true)->get();
+        $categories = Skill::select('category')
+            ->distinct()
+            ->orderBy('category')
+            ->get();
+
         return view('jobs.create', compact('categories'));
     }
 
     /**
-     * Store a newly created resource in storage.
+     * Store a newly created job in storage.
+     *
+     * @param  \App\Http\Requests\StoreJobRequest  $request
+     * @return \Illuminate\Http\Response
      */
-    public function store(Request $request)
+    public function store(StoreJobRequest $request)
     {
-        $this->authorize('create', Job::class);
+        // Only clients can create jobs
+        if (!Auth::user()->isClient()) {
+            return redirect()->route('dashboard')
+                ->with('error', 'Only clients can post jobs.');
+        }
 
-        $validated = $request->validate([
-            'title' => 'required|string|max:255',
-            'description' => 'required|string',
-            'category_id' => 'required|exists:skills,id',
-            'budget' => 'required|numeric|min:0',
-            'location' => 'required|string|max:255',
-        ]);
-
-        $job = new Job($validated);
+        $job = new Job();
         $job->client_id = Auth::id();
+        $job->title = $request->title;
+        $job->description = $request->description;
+        $job->category_id = $request->category_id;
+        $job->budget = $request->budget;
+        $job->location = $request->location;
         $job->status = 'posted';
         $job->save();
 
-        return redirect()->route('jobs.show', $job)->with('success', 'Job posted successfully!');
+        // Handle file uploads if present
+        if ($request->hasFile('attachments')) {
+            foreach ($request->file('attachments') as $file) {
+                $job->addMedia($file)
+                    ->toMediaCollection('attachments');
+            }
+        }
+
+        return redirect()->route('jobs.show', $job)
+            ->with('success', 'Job posted successfully.');
     }
 
     /**
-     * Display the specified resource.
+     * Display the specified job.
+     *
+     * @param  \App\Models\Job  $job
+     * @return \Illuminate\Http\Response
      */
     public function show(Job $job)
     {
-        $job->load(['client', 'category', 'applications.worker']);
         $hasApplied = false;
-        $userApplication = null;
 
-        if (Auth::check() && Auth::user()->isWorker()) {
-            $hasApplied = $job->applications->where('worker_id', Auth::id())->count() > 0;
-            $userApplication = $job->applications->where('worker_id', Auth::id())->first();
+        if (Auth::user()->isWorker()) {
+            $hasApplied = JobApplication::where('job_id', $job->id)
+                ->where('worker_id', Auth::id())
+                ->exists();
         }
 
-        return view('jobs.show', compact('job', 'hasApplied', 'userApplication'));
+        $isOwner = Auth::id() === $job->client_id;
+
+        return view('jobs.show', compact('job', 'hasApplied', 'isOwner'));
     }
 
     /**
-     * Show the form for editing the specified resource.
+     * Show the form for editing the specified job.
+     *
+     * @param  \App\Models\Job  $job
+     * @return \Illuminate\Http\Response
      */
     public function edit(Job $job)
     {
-        $this->authorize('update', $job);
+        // Only the job owner can edit it
+        if (Auth::id() !== $job->client_id) {
+            return redirect()->route('jobs.show', $job)
+                ->with('error', 'You are not authorized to edit this job.');
+        }
 
-        $categories = Skill::where('is_category', true)->get();
+        // Only allow editing if the job is still in posted status
+        if ($job->status !== 'posted') {
+            return redirect()->route('jobs.show', $job)
+                ->with('error', 'This job can no longer be edited.');
+        }
+
+        $categories = Skill::select('category')
+            ->distinct()
+            ->orderBy('category')
+            ->get();
+
         return view('jobs.edit', compact('job', 'categories'));
     }
 
     /**
-     * Update the specified resource in storage.
+     * Update the specified job in storage.
+     *
+     * @param  \App\Http\Requests\UpdateJobRequest  $request
+     * @param  \App\Models\Job  $job
+     * @return \Illuminate\Http\Response
      */
-    public function update(Request $request, Job $job)
+    public function update(UpdateJobRequest $request, Job $job)
     {
-        $this->authorize('update', $job);
+        // Only the job owner can update it
+        if (Auth::id() !== $job->client_id) {
+            return redirect()->route('jobs.show', $job)
+                ->with('error', 'You are not authorized to update this job.');
+        }
 
-        $validated = $request->validate([
-            'title' => 'required|string|max:255',
-            'description' => 'required|string',
-            'category_id' => 'required|exists:skills,id',
-            'budget' => 'required|numeric|min:0',
-            'location' => 'required|string|max:255',
-        ]);
+        // Only allow updating if the job is still in posted status
+        if ($job->status !== 'posted') {
+            return redirect()->route('jobs.show', $job)
+                ->with('error', 'This job can no longer be updated.');
+        }
 
-        $job->update($validated);
+        $job->title = $request->title;
+        $job->description = $request->description;
+        $job->category_id = $request->category_id;
+        $job->budget = $request->budget;
+        $job->location = $request->location;
+        $job->save();
 
-        return redirect()->route('jobs.show', $job)->with('success', 'Job updated successfully!');
+        // Handle file uploads if present
+        if ($request->hasFile('attachments')) {
+            foreach ($request->file('attachments') as $file) {
+                $job->addMedia($file)
+                    ->toMediaCollection('attachments');
+            }
+        }
+
+        return redirect()->route('jobs.show', $job)
+            ->with('success', 'Job updated successfully.');
     }
 
     /**
-     * Remove the specified resource from storage.
+     * Remove the specified job from storage.
+     *
+     * @param  \App\Models\Job  $job
+     * @return \Illuminate\Http\Response
      */
     public function destroy(Job $job)
     {
-        $this->authorize('delete', $job);
+        // Only the job owner can delete it
+        if (Auth::id() !== $job->client_id) {
+            return redirect()->route('jobs.show', $job)
+                ->with('error', 'You are not authorized to delete this job.');
+        }
+
+        // Only allow deleting if the job is still in posted status
+        if ($job->status !== 'posted') {
+            return redirect()->route('jobs.show', $job)
+                ->with('error', 'This job can no longer be deleted.');
+        }
 
         $job->delete();
 
-        return redirect()->route('jobs.index')->with('success', 'Job deleted successfully!');
+        return redirect()->route('dashboard')
+            ->with('success', 'Job deleted successfully.');
     }
 
     /**
-     * Update job status
+     * Apply for a job.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @param  \App\Models\Job  $job
+     * @return \Illuminate\Http\Response
      */
-    public function updateStatus(Request $request, Job $job)
+    public function apply(Request $request, Job $job)
     {
-        $this->authorize('update', $job);
-
-        $validated = $request->validate([
-            'status' => 'required|in:posted,in_progress,completed',
-        ]);
-
-        $job->status = $validated['status'];
-
-        if ($validated['status'] === 'completed') {
-            $job->completed_at = now();
+        // Only workers can apply for jobs
+        if (!Auth::user()->isWorker()) {
+            return redirect()->route('jobs.show', $job)
+                ->with('error', 'Only workers can apply for jobs.');
         }
 
+        // Check if the worker has already applied
+        $existingApplication = JobApplication::where('job_id', $job->id)
+            ->where('worker_id', Auth::id())
+            ->first();
+
+        if ($existingApplication) {
+            return redirect()->route('jobs.show', $job)
+                ->with('error', 'You have already applied for this job.');
+        }
+
+        // Validate the request
+        $request->validate([
+            'proposal' => 'required|string|min:10|max:1000',
+        ]);
+
+        // Create job application
+        $application = new JobApplication();
+        $application->job_id = $job->id;
+        $application->worker_id = Auth::id();
+        $application->proposal = $request->proposal;
+        $application->status = 'pending';
+        $application->save();
+
+        return redirect()->route('jobs.show', $job)
+            ->with('success', 'Application submitted successfully.');
+    }
+
+    /**
+     * Mark a job as complete.
+     *
+     * @param  \App\Models\Job  $job
+     * @return \Illuminate\Http\Response
+     */
+    public function complete(Job $job)
+    {
+        // Only the job owner can mark it as complete
+        if (Auth::id() !== $job->client_id) {
+            return redirect()->route('jobs.show', $job)
+                ->with('error', 'You are not authorized to mark this job as complete.');
+        }
+
+        // Only allow completing if the job is in progress
+        if ($job->status !== 'in_progress') {
+            return redirect()->route('jobs.show', $job)
+                ->with('error', 'This job is not currently in progress.');
+        }
+
+        $job->status = 'completed';
         $job->save();
 
-        return redirect()->route('jobs.show', $job)->with('success', 'Job status updated successfully!');
+        return redirect()->route('jobs.show', $job)
+            ->with('success', 'Job marked as complete. Please leave a review for the worker.');
     }
 }

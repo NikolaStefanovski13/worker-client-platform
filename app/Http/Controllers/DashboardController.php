@@ -1,56 +1,145 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\DashboardController;
-use App\Http\Controllers\JobController;
-use App\Http\Controllers\JobApplicationController;
-use App\Http\Controllers\ProfileController;
-use App\Http\Controllers\MessageController;
-use App\Http\Controllers\PaymentController;
-use App\Http\Controllers\ReviewController;
-use App\Http\Controllers\SearchController;
+namespace App\Http\Controllers;
 
-/*
-|--------------------------------------------------------------------------
-| Web Routes
-|--------------------------------------------------------------------------
-*/
+use Illuminate\Http\Request;
+use App\Models\Job;
+use App\Models\JobApplication;
+use App\Models\Message;
+use App\Models\Notification;
 
-Route::get('/', function () {
-    return view('welcome');
-});
+class DashboardController extends Controller
+{
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    public function __construct()
+    {
+        $this->middleware('auth');
+    }
 
-// Authentication routes (Laravel's default)
-Auth::routes();
+    /**
+     * Show the appropriate dashboard based on user type.
+     *
+     * @return \Illuminate\Contracts\Support\Renderable
+     */
+    public function index()
+    {
+        if (auth()->user()->isWorker()) {
+            return $this->workerDashboard();
+        } elseif (auth()->user()->isClient()) {
+            return $this->clientDashboard();
+        }
 
-// Dashboard
-Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
+        // Fallback if no specific user type
+        return view('dashboard.general');
+    }
 
-// Profile routes
-Route::get('/profile', [ProfileController::class, 'show'])->name('profile.show');
-Route::get('/profile/edit', [ProfileController::class, 'edit'])->name('profile.edit');
-Route::put('/profile', [ProfileController::class, 'update'])->name('profile.update');
+    /**
+     * Display worker dashboard.
+     *
+     * @return \Illuminate\Contracts\Support\Renderable
+     */
+    protected function workerDashboard()
+    {
+        $user = auth()->user();
 
-// Job routes
-Route::resource('jobs', JobController::class);
-Route::put('/jobs/{job}/status', [JobController::class, 'updateStatus'])->name('jobs.update-status');
+        $appliedJobs = JobApplication::where('worker_id', $user->id)
+            ->with('job')
+            ->latest()
+            ->take(5)
+            ->get();
 
-// Job application routes
-Route::post('/jobs/{job}/apply', [JobApplicationController::class, 'store'])->name('job-applications.store');
-Route::put('/job-applications/{jobApplication}/status', [JobApplicationController::class, 'updateStatus'])->name('job-applications.update-status');
+        $activeJobs = JobApplication::where('worker_id', $user->id)
+            ->where('status', 'accepted')
+            ->whereHas('job', function ($query) {
+                $query->where('status', 'in_progress');
+            })
+            ->with('job')
+            ->latest()
+            ->take(5)
+            ->get();
 
-// Message routes
-Route::get('/messages', [MessageController::class, 'index'])->name('messages.index');
-Route::get('/messages/{job}', [MessageController::class, 'show'])->name('messages.show');
-Route::post('/messages/{job}', [MessageController::class, 'store'])->name('messages.store');
+        $completedJobs = JobApplication::where('worker_id', $user->id)
+            ->whereHas('job', function ($query) {
+                $query->where('status', 'completed');
+            })
+            ->with('job')
+            ->latest()
+            ->take(5)
+            ->get();
 
-// Payment routes
-Route::get('/payments', [PaymentController::class, 'index'])->name('payments.index');
-Route::post('/payments/{job}', [PaymentController::class, 'store'])->name('payments.store');
-Route::put('/payments/{payment}/release', [PaymentController::class, 'release'])->name('payments.release');
+        $newMessages = Message::where('receiver_id', $user->id)
+            ->whereNull('read_at')
+            ->count();
 
-// Review routes
-Route::post('/reviews/{job}', [ReviewController::class, 'store'])->name('reviews.store');
+        $notifications = Notification::where('user_id', $user->id)
+            ->latest()
+            ->take(5)
+            ->get();
 
-// Search routes
-Route::get('/search', [SearchController::class, 'index'])->name('search.index');
+        return view('dashboard.worker', compact(
+            'appliedJobs',
+            'activeJobs',
+            'completedJobs',
+            'newMessages',
+            'notifications'
+        ));
+    }
+
+    /**
+     * Display client dashboard.
+     *
+     * @return \Illuminate\Contracts\Support\Renderable
+     */
+    protected function clientDashboard()
+    {
+        $user = auth()->user();
+
+        $postedJobs = Job::where('client_id', $user->id)
+            ->latest()
+            ->take(5)
+            ->get();
+
+        $inProgressJobs = Job::where('client_id', $user->id)
+            ->where('status', 'in_progress')
+            ->latest()
+            ->take(5)
+            ->get();
+
+        $completedJobs = Job::where('client_id', $user->id)
+            ->where('status', 'completed')
+            ->latest()
+            ->take(5)
+            ->get();
+
+        $jobApplications = JobApplication::whereHas('job', function ($query) use ($user) {
+            $query->where('client_id', $user->id);
+        })
+            ->where('status', 'pending')
+            ->with(['job', 'worker'])
+            ->latest()
+            ->take(5)
+            ->get();
+
+        $newMessages = Message::where('receiver_id', $user->id)
+            ->whereNull('read_at')
+            ->count();
+
+        $notifications = Notification::where('user_id', $user->id)
+            ->latest()
+            ->take(5)
+            ->get();
+
+        return view('dashboard.client', compact(
+            'postedJobs',
+            'inProgressJobs',
+            'completedJobs',
+            'jobApplications',
+            'newMessages',
+            'notifications'
+        ));
+    }
+}
